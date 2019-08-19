@@ -91,8 +91,8 @@
 ],
 "volumes":[
   { "name": "varetcd",
-    "hostPath": {
-        "path": "/mnt/master-pd/var/etcd"}
+    "emptyDir": {
+         "medium": "Memory"}
   },
   { "name": "varlogetcd",
     "hostPath": {
