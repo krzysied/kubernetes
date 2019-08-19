@@ -2126,6 +2126,8 @@ function kube-up() {
     if ! replicate-master; then
       remove-replica-from-etcd 2379 || true
       remove-replica-from-etcd 4002 || true
+      remove-replica-from-etcd 4012 || true
+      remove-replica-from-etcd 4022 || true
     fi
   else
     check-existing
@@ -2198,7 +2200,7 @@ function create-network() {
       --project "${NETWORK_PROJECT}" \
       --network "${NETWORK}" \
       --source-ranges "10.0.0.0/8" \
-      --allow "tcp:1-2379,tcp:2382-65535,udp:1-65535,icmp" \
+      --allow "tcp:1-2379,tcp:2384-65535,udp:1-65535,icmp" \
       --target-tags "${MASTER_TAG}"&
   fi
 
@@ -2519,7 +2521,7 @@ function create-master() {
       --project "${NETWORK_PROJECT}" \
       --network "${NETWORK}" \
       --source-tags "${MASTER_TAG}" \
-      --allow "tcp:2380,tcp:2381" \
+      --allow "tcp:2380,tcp:2381,tcp:2382,tcp:2383" \
       --target-tags "${MASTER_TAG}" &
   fi
 
@@ -2608,6 +2610,16 @@ function replicate-master() {
   fi
   if ! add-replica-to-etcd 4002 2381; then
     echo "Failed to add master replica to etcd events cluster."
+    return 1
+  fi
+
+  if ! add-replica-to-etcd 4012 2382; then
+    echo "Failed to add master replica to etcd nodes cluster."
+    return 1
+  fi
+
+  if ! add-replica-to-etcd 4022 2383; then
+    echo "Failed to add master replica to etcd nodes cluster."
     return 1
   fi
 
@@ -3137,6 +3149,8 @@ function kube-down() {
   # Un-register the master replica from etcd and events etcd.
   remove-replica-from-etcd 2379
   remove-replica-from-etcd 4002
+  remove-replica-from-etcd 4012
+  remove-replica-from-etcd 4022
 
   # Delete the master replica (if it exists).
   if gcloud compute instances describe "${REPLICA_NAME}" --zone "${ZONE}" --project "${PROJECT}" &>/dev/null; then

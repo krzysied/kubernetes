@@ -68,6 +68,7 @@ INITIAL_ADVERTISE_PEER_URLS="${INITIAL_ADVERTISE_PEER_URLS:-http://localhost:238
 # Port on which etcd is exposed.
 etcd_port=2379
 event_etcd_port=4002
+node_etcd_port=4012
 
 # Wait until both etcd instances are up
 wait_for_etcd_up() {
@@ -237,6 +238,13 @@ fi
 # Verify that event etcd is back.
 echo "Waiting for event etcd to come back"
 if ! wait_for_etcd_up "${event_etcd_port}"; then
+  echo "Event etcd didn't come back correctly"
+  exit 1
+fi
+
+# Verify that node etcd is back.
+echo "Waiting for node etcd to come back"
+if ! wait_for_etcd_up "${node_etcd_port}"; then
   echo "Event etcd didn't come back correctly"
   exit 1
 fi

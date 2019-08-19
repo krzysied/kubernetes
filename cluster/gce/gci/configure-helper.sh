@@ -1483,6 +1483,12 @@ function start-etcd-servers {
 
   prepare-log-file /var/log/etcd-events.log
   prepare-etcd-manifest "-events" "4002" "2381" "100m" "etcd-events.manifest"
+
+  prepare-log-file /var/log/etcd-nodes.log
+  prepare-etcd-manifest "-nodes" "4012" "2382" "200m" "etcd-nodes.manifest"
+
+  prepare-log-file /var/log/etcd-leases.log
+  prepare-etcd-manifest "-leases" "4022" "2383" "200m" "etcd-leases.manifest"
 }
 
 # Calculates the following variables based on env variables, which will be used
@@ -1557,7 +1563,7 @@ function start-kube-apiserver {
   params+=" --client-ca-file=${CA_CERT_BUNDLE_PATH}"
   params+=" --etcd-servers=${ETCD_SERVERS:-http://127.0.0.1:2379}"
   if [[ -z "${ETCD_SERVERS:-}" ]]; then
-    params+=" --etcd-servers-overrides=${ETCD_SERVERS_OVERRIDES:-/events#http://127.0.0.1:4002}"
+    params+=" --etcd-servers-overrides=${ETCD_SERVERS_OVERRIDES:-/events#http://127.0.0.1:4002,/nodes#http://127.0.0.1:4012,coordination.k8s.io/leases#http://127.0.0.1:4022}"
   elif [[ -n "${ETCD_SERVERS_OVERRIDES:-}" ]]; then
     params+=" --etcd-servers-overrides=${ETCD_SERVERS_OVERRIDES:-}"
   fi
