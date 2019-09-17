@@ -329,6 +329,15 @@ func newClientStream(ctx context.Context, desc *StreamDesc, cc *ClientConn, meth
 			}
 		}()
 	}
+	if sh != nil {
+		creation := &stats.StreamCreation{
+			Client:    true,
+			BeginTime: beginTime,
+			CreationTime: time.Now(),
+		}
+		sh.HandleRPC(ctx, creation)
+	}
+	
 	return cs, nil
 }
 
@@ -376,6 +385,11 @@ type csAttempt struct {
 
 	statsHandler stats.Handler
 	beginTime    time.Time
+	sendTime time.Time
+	beforeReceiveTime time.Time
+	receiveTime time.Time
+	receiveEOMTime time.Time
+	beforeDecompSet time.Time
 }
 
 func (cs *clientStream) Context() context.Context {
@@ -453,6 +467,10 @@ func (a *csAttempt) trailer() metadata.MD {
 }
 
 func (a *csAttempt) sendMsg(m interface{}) (err error) {
+	defer func() {
+		a.sendTime = time.Now()
+	}()
+	start := time.Now()
 	// TODO Investigate how to signal the stats handling party.
 	// generate error stats if err != nil && err != io.EOF?
 	cs := a.cs
@@ -499,7 +517,9 @@ func (a *csAttempt) sendMsg(m interface{}) (err error) {
 	err = a.t.Write(a.s, hdr, payload, &transport.Options{Last: !cs.desc.ClientStreams})
 	if err == nil {
 		if a.statsHandler != nil {
-			a.statsHandler.HandleRPC(a.ctx, outPayload(true, m, data, payload, time.Now()))
+			tmp := outPayload(true, m, data, payload, time.Now())
+			tmp.StartTime = start
+			a.statsHandler.HandleRPC(a.ctx, tmp)
 		}
 		if channelz.IsOn() {
 			a.t.IncrMsgSent()
@@ -518,11 +538,16 @@ func (a *csAttempt) recvMsg(m interface{}) (err error) {
 		}
 	}()
 	var inPayload *stats.InPayload
+	var inRecvPayload *stats.InRecvPayload
 	if a.statsHandler != nil {
 		inPayload = &stats.InPayload{
 			Client: true,
 		}
+		inRecvPayload = &stats.InRecvPayload{
+			Client: true,
+		}
 	}
+	a.beforeDecompSet = time.Now()
 	if !a.decompSet {
 		// Block until we receive headers containing received message encoding.
 		if ct := a.s.RecvCompress(); ct != "" && ct != encoding.Identity {
@@ -539,7 +564,9 @@ func (a *csAttempt) recvMsg(m interface{}) (err error) {
 		// Only initialize this state once per stream.
 		a.decompSet = true
 	}
-	err = recv(a.p, cs.codec, a.s, a.dc, m, *cs.c.maxReceiveMessageSize, inPayload, a.decomp)
+	a.beforeReceiveTime = time.Now()
+	err = recv(a.p, cs.codec, a.s, a.dc, m, *cs.c.maxReceiveMessageSize, inPayload, inRecvPayload, a.decomp)
+	a.receiveTime = time.Now()
 	if err != nil {
 		if err == io.EOF {
 			if statusErr := a.s.Status().Err(); statusErr != nil {
@@ -559,6 +586,9 @@ func (a *csAttempt) recvMsg(m interface{}) (err error) {
 	if inPayload != nil {
 		a.statsHandler.HandleRPC(a.ctx, inPayload)
 	}
+	if inRecvPayload != nil {
+		a.statsHandler.HandleRPC(a.ctx, inRecvPayload)
+	}
 	if channelz.IsOn() {
 		a.t.IncrMsgRecv()
 	}
@@ -567,9 +597,11 @@ func (a *csAttempt) recvMsg(m interface{}) (err error) {
 		return nil
 	}
 
+	
 	// Special handling for non-server-stream rpcs.
 	// This recv expects EOF or errors, so we don't collect inPayload.
-	err = recv(a.p, cs.codec, a.s, a.dc, m, *cs.c.maxReceiveMessageSize, nil, a.decomp)
+	err = recv(a.p, cs.codec, a.s, a.dc, m, *cs.c.maxReceiveMessageSize, nil, nil, a.decomp)
+	a.receiveEOMTime = time.Now()
 	if err == nil {
 		return toRPCErr(errors.New("grpc: client streaming protocol violation: get <nil>, want <EOF>"))
 	}
@@ -606,6 +638,11 @@ func (a *csAttempt) finish(err error) {
 		end := &stats.End{
 			Client:    true,
 			BeginTime: a.beginTime,
+			SendTime: a.sendTime,
+			BeforeDecompSet: a.beforeDecompSet,
+			BeforeReceiveTime: a.beforeReceiveTime,
+			ReceiveTime: a.receiveTime,
+			ReceiveEOMTime: a.receiveEOMTime,
 			EndTime:   time.Now(),
 			Error:     err,
 		}
@@ -754,10 +791,12 @@ func (ss *serverStream) RecvMsg(m interface{}) (err error) {
 		}
 	}()
 	var inPayload *stats.InPayload
+	var inRecvPayload *stats.InRecvPayload
 	if ss.statsHandler != nil {
 		inPayload = &stats.InPayload{}
+		inRecvPayload = &stats.InRecvPayload{}
 	}
-	if err := recv(ss.p, ss.codec, ss.s, ss.dc, m, ss.maxReceiveMessageSize, inPayload, ss.decomp); err != nil {
+	if err := recv(ss.p, ss.codec, ss.s, ss.dc, m, ss.maxReceiveMessageSize, inPayload, inRecvPayload, ss.decomp); err != nil {
 		if err == io.EOF {
 			return err
 		}
@@ -768,6 +807,9 @@ func (ss *serverStream) RecvMsg(m interface{}) (err error) {
 	}
 	if inPayload != nil {
 		ss.statsHandler.HandleRPC(ss.s.Context(), inPayload)
+	}
+	if inRecvPayload != nil {
+		ss.statsHandler.HandleRPC(ss.s.Context(), inRecvPayload)
 	}
 	return nil
 }

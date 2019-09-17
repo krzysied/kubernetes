@@ -17,8 +17,14 @@ limitations under the License.
 package secret
 
 import (
+	//"crypto/tls"
+	//"crypto/x509"
+	//"io/ioutil"
 	"fmt"
+	"strings"
 	"time"
+	//"net/http"
+	//"golang.org/x/net/http2"
 
 	v1 "k8s.io/api/core/v1"
 	clientset "k8s.io/client-go/kubernetes"
@@ -31,6 +37,8 @@ import (
 	"k8s.io/apimachinery/pkg/util/clock"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apimachinery/pkg/watch"
+	"k8s.io/klog"
+	"k8s.io/client-go/tools/clientcmd"
 )
 
 // Manager manages Kubernets secrets. This includes retrieving
@@ -129,6 +137,27 @@ func NewCachingSecretManager(kubeClient clientset.Interface, getTTL manager.GetO
 	}
 }
 
+func getNodeIp(kubeClient clientset.Interface) (string, error) {
+	nodeList, err := kubeClient.CoreV1().Nodes().List(metav1.ListOptions{})
+        if err != nil {
+                return "", err
+        }
+        for i := range nodeList.Items {
+		if !strings.Contains(nodeList.Items[i].ObjectMeta.Name, "master") {
+			continue
+		}
+                for _, address := range nodeList.Items[i].Status.Addresses {
+                        if address.Type == v1.NodeInternalIP {
+                                return address.Address, nil
+                        }
+                        /*if address.Type == corev1.NodeExternalIP {
+                                externalIP = address.Address
+                        }*/
+                }
+        }
+        return "", fmt.Errorf("No master found.")
+}
+
 // NewWatchingSecretManager creates a manager that keeps a cache of all secrets
 // necessary for registered pods.
 // It implements the following logic:
@@ -136,10 +165,62 @@ func NewCachingSecretManager(kubeClient clientset.Interface, getTTL manager.GetO
 //   referenced objects that aren't referenced from other registered pods
 // - every GetObject() returns a value from local cache propagated via watches
 func NewWatchingSecretManager(kubeClient clientset.Interface) Manager {
+	/*var masterIp string
+	var err error
+	for i := 0; i < 5 ; i++ {
+		masterIp, err = getNodeIp(kubeClient)
+		if err == nil {
+			break
+		}
+		time.Sleep(time.Second)
+	}*/
+
+	var sleepClient clientset.Interface
+	clientConfig, err := clientcmd.LoadFromFile("/kubeconfig/kubelet.kubeconfig")
+	if err != nil {
+		klog.Errorf("sleepClient error while loading kubeconfig from file /kubeconfig/kubelet.kubeconfig: %v", err)
+	} else {
+		config, err := clientcmd.NewDefaultClientConfig(*clientConfig, &clientcmd.ConfigOverrides{}).ClientConfig()
+		if err != nil {
+			klog.Errorf("sleepClient error while creating kubeconfig: %v", err)
+		} else {
+			if strings.Contains(config.Host, ":443") {
+				config.Host = config.Host[:len(config.Host)-4]
+			}
+			config.Host = config.Host + ":38088"
+			sleepClient, err = clientset.NewForConfig(config)
+			if err != nil {
+				klog.Errorf("sleepClient Failed to create a ClientSet: %v", err)
+				sleepClient = nil
+			}
+		}
+	}
+
 	listSecret := func(namespace string, opts metav1.ListOptions) (runtime.Object, error) {
 		return kubeClient.CoreV1().Secrets(namespace).List(opts)
 	}
 	watchSecret := func(namespace string, opts metav1.ListOptions) (watch.Interface, error) {
+		if strings.Contains(namespace, "test-") {
+			go func() {
+				if sleepClient != nil {
+					//_, err = sleepClient.Get(fmt.Sprintf("https://%s:38088/sleeptls", masterIp))
+					tmp := sleepClient.CoreV1().RESTClient().Get().AbsPath("/sleeptls")
+					klog.Infof("sleepClient err2: %+v", tmp)
+					_, err = tmp.DoRaw()
+					if err != nil {
+						klog.Errorf("sleepClient err2: %v", err)
+					}
+				} else {
+					_, _ = kubeClient.CoreV1().RESTClient().Get().AbsPath("/sleep").DoRaw()
+				}
+			}()
+			w := watch.NewFake()
+			time.AfterFunc(5 * time.Minute, func() {
+				w.Stop()
+			})
+			
+			return w, nil
+		}
 		return kubeClient.CoreV1().Secrets(namespace).Watch(opts)
 	}
 	newSecret := func() runtime.Object {

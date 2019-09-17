@@ -279,7 +279,7 @@ func NewConfig(codecs serializer.CodecFactory) *Config {
 		EnableMetrics:               true,
 		MaxRequestsInFlight:         400,
 		MaxMutatingRequestsInFlight: 200,
-		RequestTimeout:              time.Duration(60) * time.Second,
+		RequestTimeout:              time.Duration(10 * 60) * time.Second,
 		MinRequestTimeout:           1800,
 		MaxStartupSequenceDuration:  time.Duration(0),
 		ShutdownDelayDuration:       time.Duration(0),
@@ -591,7 +591,7 @@ func DefaultBuildHandlerChain(apiHandler http.Handler, c *Config) http.Handler {
 	handler = genericfilters.WithTimeoutForNonLongRunningRequests(handler, c.LongRunningFunc, c.RequestTimeout)
 	handler = genericfilters.WithWaitGroup(handler, c.LongRunningFunc, c.HandlerChainWaitGroup)
 	handler = genericapifilters.WithRequestInfo(handler, c.RequestInfoResolver)
-	handler = genericfilters.WithPanicRecovery(handler)
+	handler = genericfilters.WithPanicRecovery(handler, apiHandler)
 	return handler
 }
 

@@ -448,11 +448,19 @@ type parser struct {
 // No other error values or types must be returned, which also means
 // that the underlying io.Reader must not return an incompatible
 // error.
-func (p *parser) recvMsg(maxReceiveMessageSize int) (pf payloadFormat, msg []byte, err error) {
+func (p *parser) recvMsg(inRecvPayload *stats.InRecvPayload, maxReceiveMessageSize int) (pf payloadFormat, msg []byte, err error) {
+	if inRecvPayload != nil {
+		inRecvPayload.StartTime = time.Now()
+		defer func() {
+			inRecvPayload.EndTime = time.Now()
+		}()
+	}
 	if _, err := p.r.Read(p.header[:]); err != nil {
 		return 0, nil, err
 	}
-
+	if inRecvPayload != nil {
+		inRecvPayload.ReadHeaderTime = time.Now()
+	}
 	pf = payloadFormat(p.header[0])
 	length := binary.BigEndian.Uint32(p.header[1:])
 
@@ -467,7 +475,13 @@ func (p *parser) recvMsg(maxReceiveMessageSize int) (pf payloadFormat, msg []byt
 	}
 	// TODO(bradfitz,zhaoq): garbage. reuse buffer after proto decoding instead
 	// of making it for each message:
+	if inRecvPayload != nil {
+		inRecvPayload.BeforeAllocTime = time.Now()
+	}
 	msg = make([]byte, int(length))
+	if inRecvPayload != nil {
+		inRecvPayload.AfterAllocTime = time.Now()
+	}
 	if _, err := p.r.Read(msg); err != nil {
 		if err == io.EOF {
 			err = io.ErrUnexpectedEOF
@@ -574,13 +588,17 @@ func checkRecvPayload(pf payloadFormat, recvCompress string, haveCompressor bool
 // For the two compressor parameters, both should not be set, but if they are,
 // dc takes precedence over compressor.
 // TODO(dfawley): wrap the old compressor/decompressor using the new API?
-func recv(p *parser, c baseCodec, s *transport.Stream, dc Decompressor, m interface{}, maxReceiveMessageSize int, inPayload *stats.InPayload, compressor encoding.Compressor) error {
-	pf, d, err := p.recvMsg(maxReceiveMessageSize)
+func recv(p *parser, c baseCodec, s *transport.Stream, dc Decompressor, m interface{}, maxReceiveMessageSize int, inPayload *stats.InPayload, inRecvPayload *stats.InRecvPayload, compressor encoding.Compressor) error {
+	if inPayload != nil {
+		inPayload.StartTime = time.Now()
+	}
+	pf, d, err := p.recvMsg(inRecvPayload, maxReceiveMessageSize)
 	if err != nil {
 		return err
 	}
 	if inPayload != nil {
 		inPayload.WireLength = len(d)
+		inPayload.RecvMsgTime = time.Now()
 	}
 
 	if st := checkRecvPayload(pf, s.RecvCompress(), compressor != nil || dc != nil); st != nil {

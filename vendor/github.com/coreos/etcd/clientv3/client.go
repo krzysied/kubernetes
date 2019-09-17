@@ -34,12 +34,25 @@ import (
 	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
+
+	promgrpc "github.com/piotrkowalczuk/promgrpc"
+	prom "github.com/prometheus/client_golang/prometheus"
+
 )
 
 var (
 	ErrNoAvailableEndpoints = errors.New("etcdclient: no available endpoints")
 	ErrOldCluster           = errors.New("etcdclient: old cluster version")
 )
+
+var (
+	Ict *promgrpc.Interceptor
+)
+
+func init() {
+	Ict = promgrpc.NewInterceptor(promgrpc.InterceptorOpts{})
+	prom.MustRegister(Ict)
+}
 
 // Client provides and manages an etcd v3 client session.
 type Client struct {
@@ -271,7 +284,14 @@ func (c *Client) dialSetupOpts(endpoint string, dopts ...grpc.DialOption) (opts 
 		}
 		return conn, err
 	}
-	opts = append(opts, grpc.WithDialer(f))
+
+	dop := []grpc.DialOption{
+		grpc.WithDialer(Ict.Dialer(f)),
+		grpc.WithStatsHandler(Ict),
+	}
+	opts = append(opts, dop...)
+
+	//opts = append(opts, grpc.WithDialer(f))
 
 	creds := c.creds
 	if _, _, scheme := parseEndpoint(endpoint); len(scheme) != 0 {

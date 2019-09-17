@@ -150,6 +150,7 @@ func run(config *hollowNodeConfig) {
 		klog.Fatalf("Failed to create a ClientConfig: %v. Exiting.", err)
 	}
 
+	clientConfig.Timeout = 10 * time.Minute
 	client, err := clientset.NewForConfig(clientConfig)
 	if err != nil {
 		klog.Fatalf("Failed to create a ClientSet: %v. Exiting.", err)

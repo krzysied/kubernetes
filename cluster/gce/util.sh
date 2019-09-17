@@ -2505,7 +2505,7 @@ function create-master() {
     --project "${NETWORK_PROJECT}" \
     --network "${NETWORK}" \
     --target-tags "${MASTER_TAG}" \
-    --allow tcp:443 &
+    --allow tcp:443,tcp:38088 &
 
   # We have to make sure the disk is created before creating the master VM, so
   # run this in the foreground.
@@ -3525,7 +3525,7 @@ function test-setup() {
   gcloud compute firewall-rules create \
     --project "${NETWORK_PROJECT}" \
     --target-tags "${NODE_TAG}" \
-    --allow tcp:80,tcp:8080 \
+    --allow tcp:80,tcp:8080,tcp:38088 \
     --network "${NETWORK}" \
     "${NODE_TAG}-http-alt" 2> /dev/null || true
   # As there is no simple way to wait longer for this operation we need to manually

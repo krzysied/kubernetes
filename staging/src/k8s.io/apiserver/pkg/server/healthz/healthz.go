@@ -91,6 +91,7 @@ func NamedCheck(name string, check func(r *http.Request) error) HealthzChecker {
 // than once for the same mux will result in a panic.
 func InstallHandler(mux mux, checks ...HealthzChecker) {
 	InstallPathHandler(mux, "/healthz", checks...)
+	mux.Handle("/sleep", handleSleep)
 }
 
 // InstallReadyzHandler registers handlers for health checking on the path
@@ -149,6 +150,13 @@ func getExcludedChecks(r *http.Request) sets.String {
 	}
 	return sets.NewString()
 }
+
+var handleSleep = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	klog.Infof("Sleep start: %v", r.URL.Path)
+	time.Sleep(5 * time.Minute)
+	w.WriteHeader(http.StatusOK)
+	klog.Infof("Sleep stop: %v", r.URL.Path)
+})
 
 // handleRootHealthz returns an http.HandlerFunc that serves the provided checks.
 func handleRootHealthz(checks ...HealthzChecker) http.HandlerFunc {

@@ -19,6 +19,7 @@ package filters
 import (
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -133,6 +134,9 @@ func WithMaxInFlightLimit(
 			c = mutatingChan
 		} else {
 			c = nonMutatingChan
+		}
+		if strings.Contains(r.URL.Path, "sleep") {
+			c = nil
 		}
 
 		if c == nil {

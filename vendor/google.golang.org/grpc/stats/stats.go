@@ -48,10 +48,23 @@ type Begin struct {
 	FailFast bool
 }
 
+
 // IsClient indicates if the stats information is from client side.
 func (s *Begin) IsClient() bool { return s.Client }
 
 func (s *Begin) isRPCStats() {}
+
+type StreamCreation struct {
+	// Client is true if this Begin is from client side.
+	Client bool
+	// BeginTime is the time when the RPC begins.
+	BeginTime time.Time
+	CreationTime time.Time
+}
+
+func (s *StreamCreation) IsClient() bool { return s.Client }
+
+func (s *StreamCreation) isRPCStats() {}
 
 // InPayload contains the information for an incoming payload.
 type InPayload struct {
@@ -67,12 +80,31 @@ type InPayload struct {
 	WireLength int
 	// RecvTime is the time when the payload is received.
 	RecvTime time.Time
+	StartTime time.Time
+	RecvMsgTime time.Time
 }
 
 // IsClient indicates if the stats information is from client side.
 func (s *InPayload) IsClient() bool { return s.Client }
 
 func (s *InPayload) isRPCStats() {}
+
+type InRecvPayload struct {
+	// Client is true if this InPayload is from client side.
+	Client bool
+	// Payload is the payload with original type.
+	Payload interface{}
+	StartTime time.Time
+	EndTime time.Time
+	ReadHeaderTime time.Time
+	BeforeAllocTime time.Time
+	AfterAllocTime time.Time
+}
+
+func (s *InRecvPayload) IsClient() bool { return s.Client }
+
+func (s *InRecvPayload) isRPCStats() {}
+
 
 // InHeader contains stats when a header is received.
 type InHeader struct {
@@ -124,6 +156,7 @@ type OutPayload struct {
 	WireLength int
 	// SentTime is the time when the payload is sent.
 	SentTime time.Time
+	StartTime time.Time
 }
 
 // IsClient indicates if this stats information is from client side.
@@ -177,6 +210,11 @@ type End struct {
 	// status.Status and can be converted back to status.Status using
 	// status.FromError if non-nil.
 	Error error
+	SendTime time.Time
+	BeforeDecompSet time.Time
+	BeforeReceiveTime time.Time
+	ReceiveTime time.Time
+	ReceiveEOMTime time.Time
 }
 
 // IsClient indicates if this is from client side.

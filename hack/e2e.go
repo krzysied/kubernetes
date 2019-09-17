@@ -39,7 +39,7 @@ type flags struct {
 
 const (
 	getDefault = true
-	oldDefault = 24 * time.Hour
+	oldDefault = 1024 * time.Hour
 )
 
 func parse(args []string) (flags, error) {

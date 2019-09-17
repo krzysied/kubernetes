@@ -38,6 +38,7 @@ import (
 	"k8s.io/apiserver/pkg/endpoints/request"
 	"k8s.io/apiserver/pkg/registry/rest"
 	utiltrace "k8s.io/utils/trace"
+	"k8s.io/apimachinery/pkg/watch"
 )
 
 // getterFunc performs a get request with the given context and object name. The request
@@ -56,6 +57,36 @@ func getResourceHandler(scope *RequestScope, getter getterFunc) http.HandlerFunc
 			scope.err(err, w, req)
 			return
 		}
+		
+		/*
+		if strings.Contains(req.URL.Path, "/secrets/") {
+			stopChs := make([]chan struct{}, 0)
+			for i := 0; i < 1; i++ {
+				stopCh := make(chan struct{})
+				stopChs = append(stopChs, stopCh)
+				go func() {
+					aTab := make([][]byte, 14)
+					for i := 0; i < 10; i++ {
+						aTab[i] = make([]byte, 16)
+					}
+					for i := 10; i < 14; i++ {
+						aTab[i] = make([]byte, 48)
+					}
+					<-stopCh
+					for i := 0; i < 14; i++ {
+						aTab[i][0] = 1
+					}
+				}()
+			}
+			go func() {
+				time.Sleep(5 * time.Minute)
+				for i := 0; i < len(stopChs); i++ {
+					close(stopChs[i])
+				}
+			}()
+		}
+		*/
+		
 		ctx := req.Context()
 		ctx = request.WithNamespace(ctx, namespace)
 
@@ -164,6 +195,26 @@ func getRequestOptions(req *http.Request, scope *RequestScope, into runtime.Obje
 
 func ListResource(r rest.Lister, rw rest.Watcher, scope *RequestScope, forceWatch bool, minRequestTimeout time.Duration) http.HandlerFunc {
 	return func(w http.ResponseWriter, req *http.Request) {
+		/*if opts.Watch || forceWatch {
+			if strings.Contains(req.URL.Path, "/secrets") && strings.Contains(req.URL.Path, "test-"){
+				timeout := time.Duration(0)
+				if opts.TimeoutSeconds != nil {
+					timeout = time.Duration(*opts.TimeoutSeconds) * time.Second
+				}
+				if timeout == 0 && minRequestTimeout > 0 {
+					timeout = time.Duration(float64(minRequestTimeout) * (rand.Float64() + 1.0))
+				}
+				klog.Infof("Starting fake watch for %s, timeout=%s", req.URL.Path, timeout)
+				//watcher = watch.NewFake()
+				ctx := req.Context()
+				requestInfo, _ := request.RequestInfoFrom(ctx)
+				metrics.RecordLongRunning(req, requestInfo, metrics.APIServerComponent, func() {
+					fakeServeWatch(timeout)
+				})
+				return
+			}
+		}*/
+
 		// For performance tracking purposes.
 		trace := utiltrace.New("List " + req.URL.Path)
 
@@ -247,14 +298,26 @@ func ListResource(r rest.Lister, rw rest.Watcher, scope *RequestScope, forceWatc
 			if timeout == 0 && minRequestTimeout > 0 {
 				timeout = time.Duration(float64(minRequestTimeout) * (rand.Float64() + 1.0))
 			}
-			klog.V(3).Infof("Starting watch for %s, rv=%s labels=%s fields=%s timeout=%s", req.URL.Path, opts.ResourceVersion, opts.LabelSelector, opts.FieldSelector, timeout)
+			
 			ctx, cancel := context.WithTimeout(ctx, timeout)
 			defer cancel()
-			watcher, err := rw.Watch(ctx, &opts)
+			var watcher watch.Interface 
+			/*if strings.Contains(req.URL.Path, "/secrets") && strings.Contains(req.URL.Path, "test-"){
+				klog.Infof("Starting fake watch for %s, rv=%s labels=%s fields=%s timeout=%s", req.URL.Path, opts.ResourceVersion, opts.LabelSelector, opts.FieldSelector, timeout)
+				watcher = watch.NewFake()
+				requestInfo, _ := request.RequestInfoFrom(ctx)
+				metrics.RecordLongRunning(req, requestInfo, metrics.APIServerComponent, func() {
+				        fakeServeWatch(scope, req, w, timeout)
+			        })
+				return
+			} else {*/
+			klog.V(3).Infof("Starting watch for %s, rv=%s labels=%s fields=%s timeout=%s", req.URL.Path, opts.ResourceVersion, opts.LabelSelector, opts.FieldSelector, timeout)
+			watcher, err = rw.Watch(ctx, &opts)
 			if err != nil {
 				scope.err(err, w, req)
 				return
 			}
+			//}
 			requestInfo, _ := request.RequestInfoFrom(ctx)
 			metrics.RecordLongRunning(req, requestInfo, metrics.APIServerComponent, func() {
 				serveWatch(watcher, scope, outputMediaType, req, w, timeout)

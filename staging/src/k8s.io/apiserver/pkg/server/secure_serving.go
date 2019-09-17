@@ -31,11 +31,50 @@ import (
 
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/apimachinery/pkg/util/validation"
+
+	"github.com/prometheus/client_golang/prometheus"
 )
 
 const (
 	defaultKeepAlivePeriod = 3 * time.Minute
 )
+
+var (
+	connectionCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "apiserver_connections",
+			Help: "Counter of apiserver connection",
+		},
+		[]string{"local", "remote"},
+	)
+)
+
+func init() {
+	prometheus.MustRegister(connectionCounter)
+}
+
+
+func handleSleep() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		klog.Infof("Sleep start2: %v %v", r.URL.Path, r.Proto)
+		time.Sleep(5 * time.Minute)
+		w.WriteHeader(http.StatusOK)
+		klog.Infof("Sleep stop2: %v", r.URL.Path)
+	})
+}
+
+func index() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/" {
+			http.Error(w, http.StatusText(http.StatusNotFound), http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprintln(w, "Hello, World!")
+	})
+}
 
 // Serve runs the secure http server. It fails only if certificates cannot be loaded or the initial listen call fails.
 // The actual server loop (stoppable by closing stopCh) runs in a go routine, i.e. Serve does not block.
@@ -43,6 +82,108 @@ const (
 func (s *SecureServingInfo) Serve(handler http.Handler, shutdownTimeout time.Duration, stopCh <-chan struct{}) (<-chan struct{}, error) {
 	if s.Listener == nil {
 		return nil, fmt.Errorf("listener must not be nil")
+	}
+
+	klog.Infof("Sleep test: %v", s.Listener.Addr().String())
+	if strings.Contains(s.Listener.Addr().String(), ":443") {
+		sleepServerMux := http.NewServeMux()
+		sleepServerMux.Handle("/", index())
+		sleepServerMux.Handle("/sleep", handleSleep())
+		sleepServerMux.Handle("/sleeptls", handleSleep())
+		sleepServer := http.Server{
+			Addr: ":38088",
+			Handler: sleepServerMux,
+			MaxHeaderBytes: 1 << 20,
+			TLSConfig: &tls.Config{
+				NameToCertificate: s.SNICerts,
+				// Can't use SSLv3 because of POODLE and BEAST
+				// Can't use TLSv1.0 because of POODLE and BEAST using CBC cipher
+				// Can't use TLSv1.1 because of RC4 cipher usage
+				MinVersion: tls.VersionTLS12,
+				// enable HTTP2 for go's 1.7 HTTP Server
+				NextProtos: []string{"h2", "http/1.1"},
+			},
+		}
+
+		if s.MinTLSVersion > 0 {
+			sleepServer.TLSConfig.MinVersion = s.MinTLSVersion
+		}
+		if len(s.CipherSuites) > 0 {
+			sleepServer.TLSConfig.CipherSuites = s.CipherSuites
+		}
+
+		if s.Cert != nil {
+			sleepServer.TLSConfig.Certificates = []tls.Certificate{*s.Cert}
+		}
+
+		// append all named certs. Otherwise, the go tls stack will think no SNI processing
+		// is necessary because there is only one cert anyway.
+		// Moreover, if ServerCert.CertFile/ServerCert.KeyFile are not set, the first SNI
+		// cert will become the default cert. That's what we expect anyway.
+		for _, c := range s.SNICerts {
+			sleepServer.TLSConfig.Certificates = append(sleepServer.TLSConfig.Certificates, *c)
+		}
+
+		if s.ClientCA != nil {
+			// Populate PeerCertificates in requests, but don't reject connections without certificates
+			// This allows certificates to be validated by authenticators, while still allowing other auth types
+			sleepServer.TLSConfig.ClientAuth = tls.RequestClientCert
+			// Specify allowed CAs for client certificates
+			sleepServer.TLSConfig.ClientCAs = s.ClientCA
+		}
+
+		// At least 99% of serialized resources in surveyed clusters were smaller than 256kb.
+		// This should be big enough to accommodate most API POST requests in a single frame,
+		// and small enough to allow a per connection buffer of this size multiplied by `MaxConcurrentStreams`.
+		const resourceBody99Percentile = 256 * 1024
+
+		http2Options := &http2.Server{}
+
+		// shrink the per-stream buffer and max framesize from the 1MB default while still accommodating most API POST requests in a single frame
+		http2Options.MaxUploadBufferPerStream = resourceBody99Percentile
+		http2Options.MaxReadFrameSize = resourceBody99Percentile
+
+		// use the overridden concurrent streams setting or make the default of 250 explicit so we can size MaxUploadBufferPerConnection appropriately
+		if s.HTTP2MaxStreamsPerConnection > 0 {
+			http2Options.MaxConcurrentStreams = uint32(s.HTTP2MaxStreamsPerConnection)
+		} else {
+			http2Options.MaxConcurrentStreams = 250
+		}
+
+		// increase the connection buffer size from the 1MB default to handle the specified number of concurrent streams
+		http2Options.MaxUploadBufferPerConnection = http2Options.MaxUploadBufferPerStream * int32(http2Options.MaxConcurrentStreams)
+
+		// apply settings to the server
+		if err := http2.ConfigureServer(&sleepServer, http2Options); err != nil {
+			klog.Errorf("error configuring http2: %v", err)
+		}
+
+		go func() {
+			for {
+				select {
+				case <-stopCh:
+					return
+				default:
+					time.Sleep(30 * time.Second)
+					klog.Infof("Starting sleep server")
+					ln, err := net.Listen("tcp", ":38088")
+					if err != nil {
+						klog.Infof("Sleep listener err: %v", err)
+					}
+					listener := tls.NewListener(ln, sleepServer.TLSConfig)
+					err = sleepServer.Serve(listener)
+					klog.Infof("Sleep server err: %v", err)
+					klog.Infof("Sleep server closed")
+				}
+			}
+		}()
+		go func() {
+			<-stopCh
+			klog.Infof("Shutting down sleep server")
+			ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+			sleepServer.Shutdown(ctx)
+			cancel()
+		}()
 	}
 
 	secureServer := &http.Server{
@@ -110,7 +251,7 @@ func (s *SecureServingInfo) Serve(handler http.Handler, shutdownTimeout time.Dur
 
 	// apply settings to the server
 	if err := http2.ConfigureServer(secureServer, http2Options); err != nil {
-		return nil, fmt.Errorf("error configuring http2: %v", err)
+		return nil, fmt.Errorf("error configuring sleep server http2: %v", err)
 	}
 
 	klog.Infof("Serving securely on %s", secureServer.Addr)
@@ -232,6 +373,7 @@ func (ln tcpKeepAliveListener) Accept() (net.Conn, error) {
 	if err != nil {
 		return nil, err
 	}
+	connectionCounter.WithLabelValues(tc.LocalAddr().String(), tc.RemoteAddr().String()).Inc()
 	tc.SetKeepAlive(true)
 	tc.SetKeepAlivePeriod(defaultKeepAlivePeriod)
 	return tc, nil

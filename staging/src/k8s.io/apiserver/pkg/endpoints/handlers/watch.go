@@ -61,6 +61,38 @@ func (w *realTimeoutFactory) TimeoutCh() (<-chan time.Time, func() bool) {
 	return t.C, t.Stop
 }
 
+func fakeServeWatch(timeout time.Duration) { //scope *RequestScope, req *http.Request, w http.ResponseWriter, timeout time.Duration) {
+	/*flusher, ok := w.(http.Flusher)
+        if !ok {
+                err := fmt.Errorf("unable to start watch - can't get http.Flusher: %#v", w)
+                utilruntime.HandleError(err)
+                return
+        }*/
+
+	timeoutFactory := &realTimeoutFactory{timeout}
+	timeoutCh, cleanup := timeoutFactory.TimeoutCh()
+        defer cleanup()
+
+	/*
+        serializer, err := negotiation.NegotiateOutputMediaTypeStream(req, scope.Serializer, scope)
+        if err != nil {
+                scope.err(err, w, req)
+                return
+        }
+	mediaType := serializer.MediaType
+        if mediaType != runtime.ContentTypeJSON {
+                mediaType += ";stream=watch"
+        }
+
+
+        // begin the stream
+        w.Header().Set("Content-Type", mediaType)
+        w.Header().Set("Transfer-Encoding", "chunked")
+        w.WriteHeader(http.StatusOK)
+        flusher.Flush()*/
+	<-timeoutCh
+}
+
 // serveWatch will serve a watch response.
 // TODO: the functionality in this method and in WatchServer.Serve is not cleanly decoupled.
 func serveWatch(watcher watch.Interface, scope *RequestScope, mediaTypeOptions negotiation.MediaTypeOptions, req *http.Request, w http.ResponseWriter, timeout time.Duration) {
